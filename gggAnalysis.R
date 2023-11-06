@@ -15,6 +15,8 @@ library(doParallel)
 library(themis)
 library(stacks)
 library(kernlab)
+library(keras)
+library(tensorflow)
 
 train <- vroom("./train.csv")
 test <- vroom("./test.csv")
@@ -186,4 +188,51 @@ final_svm_wf <- svm_wf %>%
   fit(data = train)
 
 predict_and_format(final_svm_wf, test, "./svm_radial_preds.csv")
+
+# Neural Networks ---------------------------------------------------------
+nn_recipe <- recipe(type ~ ., data = train) %>%
+  update_role(id, new_role = 'id') %>% 
+  step_mutate(color = as.factor(color)) %>% 
+  step_dummy(color) %>% 
+  step_range(all_numeric_predictors(), min = 0, max = 1) # Scale to [0,1]
+
+nn_mod <- mlp(hidden_units = tune(),
+                epochs = 50,
+                ) %>% 
+  set_engine('nnet') %>% 
+  set_mode('classification')
+
+nn_wf <- workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(nn_mod)
+
+nn_tuning_grid <- grid_regular(hidden_units(range = c(1, 50)),
+                            levels = 5)
+
+nn_folds <- vfold_cv(train, v = 5, repeats = 1)
+
+tuned_nn <- nn_wf %>%
+  tune_grid(
+    resamples = nn_folds,
+    grid = nn_tuning_grid,
+    metrics = metric_set(accuracy))
+
+tuned_nn %>% collect_metrics() %>%
+   filter(.metric=="accuracy") %>%
+   ggplot(aes(x=hidden_units, y=mean)) + geom_line()
+
+CV_results <- nn_wf %>%
+  tune_grid(resamples = nn_folds,
+            grid = nn_tuning_grid,
+            metrics = metric_set(accuracy))
+
+nn_bestTune <- CV_results %>%
+  select_best("accuracy")
+
+final_nn_wf <- nn_wf %>%
+  finalize_workflow(nn_bestTune) %>%
+  fit(data = train)
+
+predict_and_format(final_nn_wf, test, "./nn_preds.csv")
+
 
