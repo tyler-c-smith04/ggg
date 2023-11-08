@@ -17,6 +17,9 @@ library(stacks)
 library(kernlab)
 library(keras)
 library(tensorflow)
+library(bonsai)
+library(lightgbm)
+library(dbarts)
 
 train <- vroom("./train.csv")
 test <- vroom("./test.csv")
@@ -235,4 +238,62 @@ final_nn_wf <- nn_wf %>%
 
 predict_and_format(final_nn_wf, test, "./nn_preds.csv")
 
+# Boosted Trees --------------------------------------------------
+boost_mod <- boost_tree(tree_depth = tune(),
+                        trees = tune(),
+                        learn_rate = tune()) %>% 
+  set_engine('lightgbm') %>%
+  set_mode('classification')
 
+boost_wf <- workflow() %>%
+  add_recipe(my_recipe) %>%
+  add_model(boost_mod)
+
+boost_tuning_grid <- grid_regular(tree_depth(),
+                                  trees(),
+                                  learn_rate(),
+                               levels = 5)
+
+boost_folds <- vfold_cv(train, v = 5, repeats = 1)
+
+CV_results <- boost_wf %>%
+  tune_grid(resamples = boost_folds,
+            grid = boost_tuning_grid,
+            metrics = metric_set(accuracy))
+
+boost_bestTune <- CV_results %>%
+  select_best("accuracy")
+
+final_boost_wf <- boost_wf %>%
+  finalize_workflow(boost_bestTune) %>%
+  fit(data = train)
+
+predict_and_format(final_boost_wf, test, "./boost_preds.csv")
+
+# BART --------------------------------------------------------------------
+bart_mod <- parsnip::bart(trees = tune()) %>% 
+  set_engine("dbarts") %>% 
+  set_mode("classification")
+
+bart_wf <- workflow() %>%
+  add_recipe(my_recipe) %>%
+  add_model(bart_mod)
+
+bart_tuning_grid <- grid_regular(trees(),
+                                  levels = 5)
+
+bart_folds <- vfold_cv(train, v = 5, repeats = 1)
+
+CV_results <- bart_wf %>%
+  tune_grid(resamples = bart_folds,
+            grid = bart_tuning_grid,
+            metrics = metric_set(accuracy))
+
+bart_bestTune <- CV_results %>%
+  select_best("accuracy")
+
+final_bart_wf <- bart_wf %>%
+  finalize_workflow(bart_bestTune) %>%
+  fit(data = train)
+
+predict_and_format(final_bart_wf, test, "./bart_preds.csv")
